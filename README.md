@@ -4,7 +4,7 @@ Welcome to the **Monitoring Plugin Proof of Concept** for OpenEverest!
 
 This plugin surfaces observability metrics (such as CPU, Memory, and Disk usage) directly inside the OpenEverest UI on the Database Cluster details page, meaning users no longer have to leave the platform to monitor their workloads.
 
-## 🌟 Features (PoC Scope)
+##  Features (PoC Scope)
 - **Native UI Integration**: Injects a seamless "Monitoring" tab into the database cluster details page.
 - **Interactive Charts**: Uses `@mui/x-charts` for beautiful, responsive time-series graphs.
 - **Metric Dropdowns**: Allows users to select between CPU, Memory, and Disk usage metrics.
@@ -12,7 +12,7 @@ This plugin surfaces observability metrics (such as CPU, Memory, and Disk usage)
 
 ---
 
-## 🏗️ Architecture Design
+##  Architecture Design
 
 A core architectural decision for this PoC was to keep the heavy lifting inside the core OpenEverest API, rather than inside the plugin's own backend. 
 
@@ -46,7 +46,7 @@ sequenceDiagram
 
 ---
 
-## 📸 Screenshots
+##  Screenshots
 
 *(Maintainer note: Add screenshots of the UI rendering here before merging)*
 
@@ -55,7 +55,7 @@ sequenceDiagram
 
 ---
 
-## 🚀 Local Development (Sandbox)
+##  Local Development (Sandbox)
 
 Because the generic plugin architecture is not fully merged into the core OpenEverest UI yet, this repository includes a **local sandbox** that mocks the OpenEverest plugin host.
 
