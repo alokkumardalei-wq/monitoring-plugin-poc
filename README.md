@@ -76,7 +76,8 @@ sequenceDiagram
 
 *(Maintainer note: Add screenshots of the UI rendering here before merging)*
 
-![Monitoring UI Sandbox](docs/screenshot-sandbox.png)
+<img width="1685" height="1073" alt="Screenshot 2026-07-08 at 11 33 06 PM" src="https://github.com/user-attachments/assets/d5769b7a-fb41-44da-9cbc-3748da27a7b5" />
+
 > *The plugin rendering metrics natively via the sandbox environment.*
 
 ---
