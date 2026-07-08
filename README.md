@@ -2,9 +2,35 @@
 
 Welcome to the **Monitoring Plugin Proof of Concept** for OpenEverest! 
 
-This plugin surfaces observability metrics (such as CPU, Memory, and Disk usage) directly inside the OpenEverest UI on the Database Cluster details page, meaning users no longer have to leave the platform to monitor their workloads.
+This plugin surfaces observability metrics (such as CPU, Memory, and Disk usage) directly inside the OpenEverest UI on the Database Cluster details page. This means users no longer have to leave the platform to monitor their workloads.
 
-##  Features (PoC Scope)
+---
+
+## Quick Start Guide
+
+To see the plugin and its interactive charts in action right now, we have provided a **Local Sandbox**. Because the main OpenEverest UI does not yet support dynamically loading generic plugins on this branch, the Sandbox provides a mocked plugin host so you can test the UI in isolation.
+
+### Step 1: Prerequisites
+This plugin relies on the **main OpenEverest API backend** (`everest-server`) to proxy requests to Prometheus/PMM securely. 
+Ensure you have your local OpenEverest backend running (e.g., via `make dev-up`).
+
+### Step 2: Start the Plugin Sandbox
+Open your terminal in this plugin repository and install the dependencies:
+```bash
+npm install
+```
+Then, start the development server:
+```bash
+npm run dev
+```
+
+### Step 3: View the Charts
+The sandbox will start a local dev server (usually on `http://localhost:3001` or `3003`). 
+Open that URL in your browser. You will see a mocked OpenEverest interface displaying the new **Monitoring** tab, complete with interactive `@mui/x-charts` and metric dropdowns!
+
+---
+
+## Features (PoC Scope)
 - **Native UI Integration**: Injects a seamless "Monitoring" tab into the database cluster details page.
 - **Interactive Charts**: Uses `@mui/x-charts` for beautiful, responsive time-series graphs.
 - **Metric Dropdowns**: Allows users to select between CPU, Memory, and Disk usage metrics.
@@ -12,7 +38,7 @@ This plugin surfaces observability metrics (such as CPU, Memory, and Disk usage)
 
 ---
 
-##  Architecture Design
+## Architecture Design
 
 A core architectural decision for this PoC was to keep the heavy lifting inside the core OpenEverest API, rather than inside the plugin's own backend. 
 
@@ -46,7 +72,7 @@ sequenceDiagram
 
 ---
 
-##  Screenshots
+## Screenshots
 
 *(Maintainer note: Add screenshots of the UI rendering here before merging)*
 
@@ -55,29 +81,9 @@ sequenceDiagram
 
 ---
 
-##  Local Development (Sandbox)
-
-Because the generic plugin architecture is not fully merged into the core OpenEverest UI yet, this repository includes a **local sandbox** that mocks the OpenEverest plugin host.
-
-To run the sandbox locally and test the UI:
-
-1. Install dependencies:
-   ```bash
-   npm install
-   ```
-2. Start the development server (runs on `localhost:3003` by default):
-   ```bash
-   npm run dev
-   ```
-3. Open `http://localhost:3003` in your browser to interact with the plugin UI!
-
-*(Note: The sandbox relies on a locally running instance of `everest-server` with the monitoring proxy endpoint implemented to fetch real data).*
-
----
-
-## 📁 Repository Structure
+## Repository Structure
 
 - `src/main.tsx` - The main entrypoint for the frontend plugin. Registers the `clusterDetailTab` extension.
 - `src/sandbox.tsx` - A mock OpenEverest plugin host for local UI testing.
-- `backend/` - A boilerplate Go file server that serves the compiled UI bundle.
+- `backend/` - A boilerplate Go file server that serves the compiled UI bundle (currently untouched for this PoC).
 - `vite.config.ts` - Vite configuration optimized for building ES modules.
