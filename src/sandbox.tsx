@@ -1,6 +1,6 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
-import type { PluginApi, ExtensionPoint } from '@openeverest/plugin-sdk';
+import type { PluginApi, Extension } from '@openeverest/plugin-sdk';
 import register from './main';
 
 // A simple mock of the OpenEverest Plugin API
@@ -13,7 +13,7 @@ class MockPluginApi implements PluginApi {
     return fetch(input, init);
   }
 
-  public registerExtension(extension: ExtensionPoint): void {
+  public registerExtension(extension: Extension): void {
     if (extension.type === 'clusterDetailTab') {
       console.log('Registered clusterDetailTab:', extension);
       const Component = extension.component;
@@ -25,7 +25,7 @@ class MockPluginApi implements PluginApi {
           <hr />
           <h2>Tab: {extension.label}</h2>
           <div style={{ border: '1px solid #ccc', padding: '20px', marginTop: '20px' }}>
-            <Component namespace="my-special-place" instanceName="mongodb-x3e" />
+            <Component namespace="my-special-place" instanceName="mongodb-x3e" cluster={{} as any} />
           </div>
         </div>
       );
