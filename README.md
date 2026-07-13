@@ -136,12 +136,9 @@ kubectl patch plugin monitoring-plugin -n everest-system --type=merge -p '{"spec
 ---
 
 ## Screenshots
+<img width="3420" height="2825" alt="screencapture-127-0-0-1-8080-databases-my-special-place-test-db-cluster-monitoring-2026-07-13-14_51_25 (1)" src="https://github.com/user-attachments/assets/b8d5bb25-b159-42b6-a109-8d4b02abfc80" />
 
-![Monitoring Plugin UI](docs/screenshot.png)
-
-> *The plugin rendering metrics beautifully inside a 2x2 CSS Grid, fully isolated from the host theme.*
-
----
+--
 
 ## Repository Structure
 
