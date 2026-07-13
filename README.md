@@ -20,7 +20,7 @@ This PoC implements a **flawless Micro-Frontend Architecture**:
 This guarantees total isolation—the host React engine and the plugin React engine never interfere with each other!
 
 ### Backend Proxy Architecture
-Instead of storing Prometheus API keys in the browser, the plugin securely queries `everest-server` via JWT authentication. The core OpenEverest API automatically retrieves the necessary credentials from Kubernetes Secrets and proxies the request to Prometheus/PMM.
+Instead of modifying the core OpenEverest API, this plugin utilizes its own Go backend to securely proxy metrics. The plugin backend uses the Kubernetes `client-go` library to discover the `DatabaseCluster` and its associated `MonitoringConfig`. It retrieves the credentials from Kubernetes Secrets and natively proxies the request directly to Prometheus/PMM, ensuring full isolation and autonomy.
 
 ### Architecture Diagram
 
@@ -28,19 +28,21 @@ Instead of storing Prometheus API keys in the browser, the plugin securely queri
 sequenceDiagram
     participant User
     participant Browser as Everest UI + Plugin
-    participant Everest as everest-server (API)
-    participant K8s as Kubernetes Secrets
+    participant PluginBackend as Plugin Go Backend
+    participant K8s as Kubernetes API
     participant PMM as Prometheus / PMM
 
     User->>Browser: Opens Database "Monitoring" Tab
-    Browser->>Everest: GET /v1/.../monitoring/metrics (JWT Auth)
+    Browser->>PluginBackend: GET /api/namespaces/.../monitoring/metrics
     
-    Everest->>K8s: Fetch secure monitoring credentials
-    K8s-->>Everest: Returns decrypted credentials
+    PluginBackend->>K8s: Fetch DatabaseCluster & MonitoringConfig
+    K8s-->>PluginBackend: Returns Configs & Secret Name
+    PluginBackend->>K8s: Fetch monitoring Secret
+    K8s-->>PluginBackend: Returns API Key
     
-    Everest->>PMM: Proxy query (e.g. rate(cpu_usage))
-    PMM-->>Everest: Return timeseries data
-    Everest-->>Browser: Return normalized JSON
+    PluginBackend->>PMM: Proxy query (e.g. rate(cpu_usage))
+    PMM-->>PluginBackend: Return timeseries data
+    PluginBackend-->>Browser: Return normalized JSON
     
     Browser->>User: Render @mui/x-charts
 ```
@@ -69,13 +71,14 @@ cp -r dist/* backend/public/dist/
 cp -r dist/* backend/dist/
 ```
 
-### 3. Build and Start the Mock Server
-The `mock-server` simulates the backend proxy by serving the plugin JavaScript bundle and returning dummy Prometheus metrics.
+### 3. Build and Start the Go Backend
+The Go backend serves the plugin JavaScript bundle and securely proxies Prometheus metrics from Kubernetes.
 ```bash
 cd backend
-go build -o mock-server .
-PORT=8081 ./mock-server
+go build -o plugin-backend .
+PORT=8081 KUBECONFIG=~/.kube/config ./plugin-backend
 ```
+*(Note: If the backend fails to connect to Kubernetes or cannot find the `DatabaseCluster`, it will gracefully fall back to generating mock sine-wave data so your local UI sandbox still works).*
 
 ### 4. Create a Dummy Database Cluster (Optional)
 If you don't have a real database provisioned, you can inject a dummy cluster into Kubernetes so the OpenEverest UI displays the details page:
@@ -136,7 +139,7 @@ kubectl patch plugin monitoring-plugin -n everest-system --type=merge -p '{"spec
 ---
 
 ## Screenshots
-<img width="3420" height="2825" alt="screencapture-127-0-0-1-8080-databases-my-special-place-test-db-cluster-monitoring-2026-07-13-14_51_25 (1)" src="https://github.com/user-attachments/assets/b8d5bb25-b159-42b6-a109-8d4b02abfc80" />
+![Monitoring Plugin UI](docs/screenshot.png)
 
 --
 
@@ -145,5 +148,5 @@ kubectl patch plugin monitoring-plugin -n everest-system --type=merge -p '{"spec
 - `src/main.tsx` - The main entrypoint for the frontend plugin. Registers the `clusterDetailTab` extension.
 - `src/MonitoringTab.tsx` - The actual monitoring React components utilizing the private isolated React engine.
 - `src/sandbox.tsx` - A mock OpenEverest plugin host for local UI testing.
-- `backend/` - A boilerplate Go file server that serves the compiled UI bundle and implements a mock Prometheus metrics proxy.
+- `backend/` - A standalone Go backend that serves the compiled UI bundle and implements a secure Prometheus metrics proxy (with mock data fallback).
 - `vite.config.ts` - Vite configuration optimized for building ES modules and chunk splitting.
