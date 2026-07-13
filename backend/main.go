@@ -9,9 +9,11 @@
 package main
 
 import (
+	"crypto/tls"
 	"embed"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"math"
 	"net/http"
@@ -23,6 +25,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -39,20 +42,14 @@ var iconData []byte
 // ---------------------------------------------------------------------------
 
 func everestAPIURL() string {
-	// Explicit override wins (useful for local dev or air-gapped setups).
 	if v := os.Getenv("EVEREST_API_URL"); v != "" {
 		return strings.TrimRight(v, "/")
 	}
-
-	// Kubernetes automatically injects <SVCNAME>_SERVICE_HOST / _SERVICE_PORT
-	// for every Service in the same namespace. Look for the "everest" service.
 	host := os.Getenv("EVEREST_SERVICE_HOST")
 	port := os.Getenv("EVEREST_SERVICE_PORT")
 	if host != "" && port != "" {
 		return fmt.Sprintf("http://%s:%s", host, port)
 	}
-
-	// Fallback to the conventional in-cluster DNS name.
 	return "http://everest-server.everest-system.svc.cluster.local:8080"
 }
 
@@ -63,10 +60,6 @@ func listenPort() string {
 	return "8080"
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(v); err != nil {
@@ -74,34 +67,22 @@ func writeJSON(w http.ResponseWriter, v any) {
 	}
 }
 
-func apiError(w http.ResponseWriter, status int, msg string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
-}
-
 // ---------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------
 
-// GET /api/hello — example endpoint.
 func handleHello(w http.ResponseWriter, r *http.Request) {
-	// The X-Everest-User header contains the JWT of the authenticated user.
-	// Use it when calling the OpenEverest API on behalf of the user.
 	_ = r.Header.Get("X-Everest-User")
-
 	writeJSON(w, map[string]string{
 		"message": "Hello from my-plugin backend!",
 	})
 }
 
-// GET /healthz — liveness/readiness probe.
 func handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte("ok"))
 }
 
-// Serve the frontend bundle (including lazy chunks).
 func handleBundle(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/")
 	if path == "" {
@@ -121,7 +102,6 @@ func handleBundle(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(data)
 }
 
-// GET /icon.png — serves the plugin icon.
 func handleIcon(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "image/png")
 	w.Header().Set("Cache-Control", "public, max-age=86400")
@@ -133,7 +113,15 @@ var k8sClient client.Client
 func initK8sClient() error {
 	config, err := rest.InClusterConfig()
 	if err != nil {
-		return err
+		// Fallback to local kubeconfig for development
+		kubeconfig := os.Getenv("KUBECONFIG")
+		if kubeconfig == "" {
+			kubeconfig = os.ExpandEnv("$HOME/.kube/config")
+		}
+		config, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
+		if err != nil {
+			return err
+		}
 	}
 	scheme := runtime.NewScheme()
 	_ = corev1.AddToScheme(scheme)
@@ -147,7 +135,95 @@ func initK8sClient() error {
 	return nil
 }
 
+func proxyToPrometheus(r *http.Request) (*http.Response, error) {
+	if k8sClient == nil {
+		return nil, fmt.Errorf("k8sClient is not initialized")
+	}
+
+	namespace := r.PathValue("namespace")
+	clusterName := r.PathValue("name")
+
+	ctx := r.Context()
+
+	// 1. Get DatabaseCluster
+	dbCluster := &everestv1alpha1.DatabaseCluster{}
+	if err := k8sClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: clusterName}, dbCluster); err != nil {
+		return nil, fmt.Errorf("failed to get DatabaseCluster %s/%s: %w", namespace, clusterName, err)
+	}
+
+	if dbCluster.Spec.Monitoring == nil || dbCluster.Spec.Monitoring.MonitoringConfigName == "" {
+		return nil, fmt.Errorf("monitoring is not configured for DatabaseCluster %s", clusterName)
+	}
+
+	monitoringConfigName := dbCluster.Spec.Monitoring.MonitoringConfigName
+
+	// 2. Get MonitoringConfig (try same namespace first, then everest-system)
+	monConfig := &everestv1alpha1.MonitoringConfig{}
+	err := k8sClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: monitoringConfigName}, monConfig)
+	if err != nil {
+		if err := k8sClient.Get(ctx, client.ObjectKey{Namespace: "everest-system", Name: monitoringConfigName}, monConfig); err != nil {
+			return nil, fmt.Errorf("failed to get MonitoringConfig %s: %w", monitoringConfigName, err)
+		}
+	}
+
+	if monConfig.Spec.Type != everestv1alpha1.PMMMonitoringType {
+		return nil, fmt.Errorf("MonitoringConfig %s is not PMM", monitoringConfigName)
+	}
+
+	pmmURL := monConfig.Spec.PMM.URL
+	secretName := monConfig.Spec.CredentialsSecretName
+
+	// 3. Get Secret
+	secret := &corev1.Secret{}
+	if err := k8sClient.Get(ctx, client.ObjectKey{Namespace: monConfig.GetNamespace(), Name: secretName}, secret); err != nil {
+		return nil, fmt.Errorf("failed to get Secret %s: %w", secretName, err)
+	}
+
+	apiKey := string(secret.Data["apiKey"])
+
+	// 4. Proxy request to Prometheus
+	reqURL := strings.TrimRight(pmmURL, "/") + "/prometheus/api/v1/query_range?" + r.URL.Query().Encode()
+	
+	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	
+	if apiKey != "" {
+		// PMM uses basic auth for api keys
+		req.SetBasicAuth("api_key", apiKey)
+	}
+
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
+	httpClient := &http.Client{Transport: tr}
+	
+	return httpClient.Do(req)
+}
+
 func handleMetrics(w http.ResponseWriter, r *http.Request) {
+	// Attempt real proxying via Kubernetes
+	resp, err := proxyToPrometheus(r)
+	if err == nil && resp.StatusCode == http.StatusOK {
+		log.Printf("Successfully proxied metrics for %s/%s", r.PathValue("namespace"), r.PathValue("name"))
+		defer resp.Body.Close()
+		for k, v := range resp.Header {
+			w.Header()[k] = v
+		}
+		w.WriteHeader(resp.StatusCode)
+		io.Copy(w, resp.Body)
+		return
+	}
+
+	if err != nil {
+		log.Printf("Proxying failed (falling back to mock data): %v", err)
+	} else {
+		log.Printf("Proxying returned status %d (falling back to mock data)", resp.StatusCode)
+		resp.Body.Close()
+	}
+
+	// Fallback to sine-wave mock data if Kubernetes resources are not found or proxying fails
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 
@@ -177,6 +253,12 @@ func handleMetrics(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 func main() {
+	if err := initK8sClient(); err != nil {
+		log.Printf("Warning: Failed to initialize Kubernetes client: %v. Proxying will fallback to mock data.", err)
+	} else {
+		log.Println("Successfully initialized Kubernetes client")
+	}
+
 	mux := http.NewServeMux()
 
 	// Frontend bundle and chunks.
