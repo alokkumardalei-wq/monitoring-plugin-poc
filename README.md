@@ -137,9 +137,9 @@ kubectl patch plugin monitoring-plugin -n everest-system --type=merge -p '{"spec
 
 ## Screenshots
 
-<img width="1685" height="1073" alt="Screenshot of the UI rendering" src="https://github.com/user-attachments/assets/d5769b7a-fb41-44da-9cbc-3748da27a7b5" />
+![Monitoring Plugin UI](docs/screenshot.png)
 
-> *The plugin rendering metrics natively via the sandbox environment.*
+> *The plugin rendering metrics beautifully inside a 2x2 CSS Grid, fully isolated from the host theme.*
 
 ---
 
