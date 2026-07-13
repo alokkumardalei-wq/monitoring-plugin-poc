@@ -13,14 +13,22 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
+
+	everestv1alpha1 "github.com/percona/everest-operator/api/everest/v1alpha1"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/rest"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // dist/main.js is copied from the frontend build during the Docker build.
 //
-//go:embed dist/main.js
+//go:embed dist
 var distFS embed.FS
 
 //go:embed dist/icon.png
@@ -93,15 +101,23 @@ func handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write([]byte("ok"))
 }
 
-// GET /main.js — serves the frontend bundle.
-func handleBundle(w http.ResponseWriter, _ *http.Request) {
-	data, err := distFS.ReadFile("dist/main.js")
+// Serve the frontend bundle (including lazy chunks).
+func handleBundle(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/")
+	if path == "" {
+		path = "main.js"
+	}
+	data, err := distFS.ReadFile("dist/" + path)
 	if err != nil {
 		http.Error(w, "bundle not found", http.StatusNotFound)
 		return
 	}
-	w.Header().Set("Content-Type", "application/javascript")
 	w.Header().Set("Cache-Control", "public, max-age=3600")
+	if strings.HasSuffix(path, ".js") {
+		w.Header().Set("Content-Type", "application/javascript")
+	} else if strings.HasSuffix(path, ".css") {
+		w.Header().Set("Content-Type", "text/css")
+	}
 	_, _ = w.Write(data)
 }
 
@@ -112,6 +128,50 @@ func handleIcon(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write(iconData)
 }
 
+var k8sClient client.Client
+
+func initK8sClient() error {
+	config, err := rest.InClusterConfig()
+	if err != nil {
+		return err
+	}
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = everestv1alpha1.AddToScheme(scheme)
+
+	c, err := client.New(config, client.Options{Scheme: scheme})
+	if err != nil {
+		return err
+	}
+	k8sClient = c
+	return nil
+}
+
+func handleMetrics(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+
+	startStr := r.URL.Query().Get("start")
+	endStr := r.URL.Query().Get("end")
+	stepStr := r.URL.Query().Get("step")
+	start, _ := strconv.ParseInt(startStr, 10, 64)
+	end, _ := strconv.ParseInt(endStr, 10, 64)
+	step, _ := strconv.ParseInt(stepStr, 10, 64)
+	if step == 0 {
+		step = 60
+	}
+
+	mockJSON := `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{},"values":[`
+	var values []string
+	for t := start; t <= end; t += step {
+		val := 40.0 + 10.0*math.Sin(float64(t)/3600.0)
+		values = append(values, fmt.Sprintf(`[%d, "%.1f"]`, t, val))
+	}
+	mockJSON += strings.Join(values, ",") + `]}]}}`
+
+	w.Write([]byte(mockJSON))
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -119,8 +179,13 @@ func handleIcon(w http.ResponseWriter, _ *http.Request) {
 func main() {
 	mux := http.NewServeMux()
 
-	// Frontend bundle.
-	mux.HandleFunc("GET /main.js", handleBundle)
+	// Frontend bundle and chunks.
+	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/healthz" || r.URL.Path == "/icon.png" {
+			return // Let other handlers process it
+		}
+		handleBundle(w, r)
+	})
 
 	// Plugin icon.
 	mux.HandleFunc("GET /icon.png", handleIcon)
@@ -130,6 +195,7 @@ func main() {
 
 	// Plugin API routes — add your handlers here.
 	mux.HandleFunc("GET /api/hello", handleHello)
+	mux.HandleFunc("GET /api/namespaces/{namespace}/database-clusters/{name}/monitoring/metrics", handleMetrics)
 
 	port := listenPort()
 	log.Printf("my-plugin backend listening on :%s (everest API: %s)", port, everestAPIURL())

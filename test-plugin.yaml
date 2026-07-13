@@ -9,6 +9,8 @@ spec:
   version: "0.1.0"
   vendor: "Acme"
   enabled: true
+  backend:
+    externalUrl: "http://host.k3d.internal:8081"
   frontend:
     bundlePath: "http://localhost:3002/main.js"
     extensionPoints:

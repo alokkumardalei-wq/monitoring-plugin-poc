@@ -6,46 +6,21 @@ This plugin surfaces observability metrics (such as CPU, Memory, and Disk usage)
 
 ---
 
-## Quick Start Guide
+## Architecture Design: True Micro-Frontend
 
-To see the plugin and its interactive charts in action right now, we have provided a **Local Sandbox**. Because the main OpenEverest UI does not yet support dynamically loading generic plugins on this branch, the Sandbox provides a mocked plugin host so you can test the UI in isolation.
+A major challenge with dynamic plugins in React applications is **Dependency Collision**. Because OpenEverest provides its own `React` instance at runtime, heavy third-party UI libraries like `@mui/material` and `@mui/x-charts` often crash when they try to use internal React hooks, because Vite bundles a conflicting private version of `react-dom` into the plugin.
 
-### Step 1: Prerequisites
-This plugin relies on the **main OpenEverest API backend** (`everest-server`) to proxy requests to Prometheus/PMM securely. 
-Ensure you have your local OpenEverest backend running (e.g., via `make dev-up`).
+### The Solution
+This PoC implements a **flawless Micro-Frontend Architecture**:
+1. The plugin bundles its *own* complete, isolated copies of `react` and `react-dom/client`.
+2. The main OpenEverest UI only receives a "dummy wrapper" component from the plugin. 
+3. When OpenEverest renders the dummy `<div>`, our plugin grabs a reference to it.
+4. The plugin then uses its *own* isolated `ReactDOM.createRoot` to render the complex Material-UI charts inside that `<div>`.
 
-### Step 2: Start the Plugin Sandbox
-Open your terminal in this plugin repository and install the dependencies:
-```bash
-npm install
-```
-Then, start the development server:
-```bash
-npm run dev
-```
+This guarantees total isolation—the host React engine and the plugin React engine never interfere with each other!
 
-### Step 3: View the Charts
-The sandbox will start a local dev server (usually on `http://localhost:3001` or `3003`). 
-Open that URL in your browser. You will see a mocked OpenEverest interface displaying the new **Monitoring** tab, complete with interactive `@mui/x-charts` and metric dropdowns!
-
----
-
-## Features (PoC Scope)
-- **Native UI Integration**: Injects a seamless "Monitoring" tab into the database cluster details page.
-- **Interactive Charts**: Uses `@mui/x-charts` for beautiful, responsive time-series graphs.
-- **Metric Dropdowns**: Allows users to select between CPU, Memory, and Disk usage metrics.
-- **Zero-Config Security**: Bypasses CORS and securely authenticates with Prometheus/PMM without storing credentials in the browser.
-
----
-
-## Architecture Design
-
-A core architectural decision for this PoC was to keep the heavy lifting inside the core OpenEverest API, rather than inside the plugin's own backend. 
-
-### Why proxy through `everest-server` instead of the plugin backend?
-1. **Security (Least Privilege):** The main `everest-server` already possesses the necessary RBAC permissions and built-in logic to securely read monitoring credentials (like API keys) from Kubernetes Secrets. Putting the proxy in the plugin would require elevating the plugin's RBAC permissions to read core cluster secrets, which is a security risk.
-2. **Reusability:** By exposing the endpoint (`GET /v1/namespaces/{namespace}/database-clusters/{name}/monitoring/metrics`) on the core API, metrics become a first-class citizen. Future CLI tools or native features can use this endpoint instantly.
-3. **Authentication:** The main server automatically handles JWT validation.
+### Backend Proxy Architecture
+Instead of storing Prometheus API keys in the browser, the plugin securely queries `everest-server` via JWT authentication. The core OpenEverest API automatically retrieves the necessary credentials from Kubernetes Secrets and proxies the request to Prometheus/PMM.
 
 ### Architecture Diagram
 
@@ -72,11 +47,97 @@ sequenceDiagram
 
 ---
 
+## Developer Guide: How to Test Locally
+
+You can test this plugin directly against a local running instance of OpenEverest (`make dev-up`).
+
+### 1. Build the Frontend Plugin
+The plugin UI must be compiled using Vite into ES Modules.
+```bash
+npm install
+npm run build
+```
+
+### 2. Copy the Frontend Build to the Backend
+The Go backend (`mock-server`) embeds the compiled UI files so they can be served over HTTP.
+```bash
+# Ensure the dist/ directory exists in the backend
+mkdir -p backend/public/dist backend/dist
+
+# Copy the built chunks from the frontend to the backend
+cp -r dist/* backend/public/dist/
+cp -r dist/* backend/dist/
+```
+
+### 3. Build and Start the Mock Server
+The `mock-server` simulates the backend proxy by serving the plugin JavaScript bundle and returning dummy Prometheus metrics.
+```bash
+cd backend
+go build -o mock-server .
+PORT=8081 ./mock-server
+```
+
+### 4. Create a Dummy Database Cluster (Optional)
+If you don't have a real database provisioned, you can inject a dummy cluster into Kubernetes so the OpenEverest UI displays the details page:
+
+```bash
+kubectl apply -f - <<EOF
+apiVersion: everest.percona.com/v1alpha1
+kind: DatabaseCluster
+metadata:
+  name: test-db-cluster
+  namespace: my-special-place
+spec:
+  engine:
+    type: psmdb
+    version: 6.0.4
+    replicas: 1
+    storage:
+      size: 1Gi
+  proxy:
+    type: mongos
+    replicas: 1
+    expose:
+      type: ClusterIP
+EOF
+
+# Patch the status to trick the UI into thinking it is "Ready"
+kubectl patch databasecluster test-db-cluster -n my-special-place \
+  --type=merge \
+  --subresource status \
+  -p '{"status": {"status": "ready", "ready": 1, "size": 1, "hostname": "dummy-host", "port": 27017}}'
+```
+
+### 5. Register the Plugin
+Apply the Plugin Custom Resource to your cluster. This tells OpenEverest where to download the plugin bundle (`main.js`).
+
+```bash
+kubectl apply -f test-plugin.yaml
+```
+*Note: The `test-plugin.yaml` should point its `bundleUrl` to the address of your locally running `mock-server`.*
+
+### 6. Bypassing the Browser Cache (Development)
+Browsers aggressively cache ES Module dynamic imports (`import()`). If you make changes to the plugin frontend and rebuild it, you must append a cache-busting version parameter to the Plugin CR to force the browser to fetch the new code.
+
+```bash
+kubectl patch plugin monitoring-plugin -n everest-system --type=merge -p '{"spec":{"frontend":{"bundlePath":"main.js?v=2"}}}'
+```
+*(Increment `v=2` to `v=3`, etc., every time you deploy a new build).*
+
+---
+
+## Features
+- **Native UI Integration**: Injects a seamless "Monitoring" tab into the database cluster details page.
+- **Isolated CSS Grid**: Uses native CSS Grid to arrange charts dynamically, bypassing global Material-UI layout dependencies.
+- **Interactive Charts**: Responsive time-series graphs powered by `@mui/x-charts`.
+- **Metric Dropdowns**: Allows users to select between CPU, Memory, and Disk usage metrics.
+- **Zero-Config Security**: Bypasses CORS and authenticates seamlessly via OpenEverest's `api.fetch()`.
+
+---
+
 ## Screenshots
 
-*(Maintainer note: Add screenshots of the UI rendering here before merging)*
-
-<img width="1685" height="1073" alt="Screenshot 2026-07-08 at 11 33 06 PM" src="https://github.com/user-attachments/assets/d5769b7a-fb41-44da-9cbc-3748da27a7b5" />
+<img width="1685" height="1073" alt="Screenshot of the UI rendering" src="https://github.com/user-attachments/assets/d5769b7a-fb41-44da-9cbc-3748da27a7b5" />
 
 > *The plugin rendering metrics natively via the sandbox environment.*
 
@@ -85,6 +146,7 @@ sequenceDiagram
 ## Repository Structure
 
 - `src/main.tsx` - The main entrypoint for the frontend plugin. Registers the `clusterDetailTab` extension.
+- `src/MonitoringTab.tsx` - The actual monitoring React components utilizing the private isolated React engine.
 - `src/sandbox.tsx` - A mock OpenEverest plugin host for local UI testing.
-- `backend/` - A boilerplate Go file server that serves the compiled UI bundle (currently untouched for this PoC).
-- `vite.config.ts` - Vite configuration optimized for building ES modules.
+- `backend/` - A boilerplate Go file server that serves the compiled UI bundle and implements a mock Prometheus metrics proxy.
+- `vite.config.ts` - Vite configuration optimized for building ES modules and chunk splitting.

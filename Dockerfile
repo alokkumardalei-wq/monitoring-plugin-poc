@@ -3,7 +3,7 @@
 # Expects dist/main.js to be pre-built (npm run build) and present
 # in the Docker build context.
 # ──────────────────────────────────────────────────────────────────
-FROM golang:1.22-alpine AS backend-builder
+FROM golang:alpine AS backend-builder
 
 WORKDIR /app
 

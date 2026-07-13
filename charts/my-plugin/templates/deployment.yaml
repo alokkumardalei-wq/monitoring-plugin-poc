@@ -15,6 +15,7 @@ spec:
       labels:
         {{- include "my-plugin.selectorLabels" . | nindent 8 }}
     spec:
+      serviceAccountName: {{ include "my-plugin.fullname" . }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
